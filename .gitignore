@@ -1,0 +1,24 @@
+# Dependencies
+node_modules/
+
+# Environment variables (contains credentials - NEVER commit)
+.env
+
+# Playwright artifacts
+playwright-report/
+test-results/
+
+# Downloads
+downloads/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+*.code-workspace
+
+# Logs
+*.log
+npm-debug.log*
