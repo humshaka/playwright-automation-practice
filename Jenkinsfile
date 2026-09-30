@@ -1,20 +1,17 @@
 // Jenkinsfile - Declarative Pipeline for the SEP Playwright QA Automation project.
 //
-// Setup instructions (one time):
-//   1. Create a Jenkins Pipeline job.
-//   2. Under "Pipeline" choose "Pipeline script from SCM":
+// Setup (one time, in Jenkins):
+//   1. Create a Pipeline job, "Pipeline script from SCM":
 //        - SCM:            Git
 //        - Repository URL: https://github.com/humshaka/playwright-automation-practice.git
-//        - Branch:         main
+//        - Branch:         */main
 //        - Script Path:    Jenkinsfile
-//   3. Add these "Secret text" credentials (Manage Jenkins > Credentials > Global):
-//        SEP_QA_URL     -> https://qa.sep.tdtm.cydeo.com/taws
-//        SEP_USERNAME   -> the SEP HTTP-Basic username
-//        SEP_PASSWORD   -> the SEP HTTP-Basic password
-//      (or rename the credential IDs below to match credentials you already have)
+//   2. Credentials (Manage Jenkins > Credentials > Global):
+//        ID: sep-qa-credentials  ->  Type: Username with password
+//        (username = SEP username, password = SEP password)
 //
-// The values are injected at runtime from Jenkins - they are never hardcoded
-// in this file and never stored in Git.
+//   No other credentials are required. SEP_QA_URL is a public URL and is defined
+//   below directly. No secrets are stored in this file or committed to Git.
 
 pipeline {
     agent any
@@ -29,10 +26,14 @@ pipeline {
         // enables retries=2, a single worker, and fails on test.only.
         CI = 'true'
 
-        // SEP credentials come from Jenkins credentials - do not hardcode.
-        SEP_QA_URL     = credentials('SEP_QA_URL')
-        SEP_USERNAME   = credentials('SEP_USERNAME')
-        SEP_PASSWORD   = credentials('SEP_PASSWORD')
+        // SEP_QA_URL is a public URL, not a secret - safe to set here.
+        SEP_QA_URL = 'https://qa.sep.tdtm.cydeo.com/taws'
+
+        // Bind the existing "Username with password" credential (sep-qa-credentials).
+        // The _USR / _PSW suffixes split it into the SEP_USERNAME / SEP_PASSWORD
+        // environment variables that the Playwright suite expects.
+        SEP_USERNAME = credentials('sep-qa-credentials_USR')
+        SEP_PASSWORD = credentials('sep-qa-credentials_PSW')
     }
 
     stages {
@@ -77,9 +78,20 @@ pipeline {
 
     post {
         always {
-            // Preserve the HTML report and JUnit XML as build artifacts.
-            archiveArtifacts artifacts: 'playwright-report/**', allowEmptyArchive: true
-            junit allowEmptyResults: true, testResults: 'test-results/junit.xml'
+            script {
+                // Only archive/publish reports when a workspace (FilePath) actually
+                // exists - avoids MissingContextVariableException on early aborts.
+                if (env.WORKSPACE) {
+                    // HTML report is optional: allowEmptyArchive means the build does
+                    // not fail if playwright-report/ does not exist.
+                    archiveArtifacts artifacts: 'playwright-report/**', allowEmptyArchive: true
+
+                    // Publish JUnit results only if the XML file was actually produced.
+                    if (fileExists('test-results/junit.xml')) {
+                        junit allowEmptyResults: true, testResults: 'test-results/junit.xml'
+                    }
+                }
+            }
         }
         success {
             echo 'SUCCESS: All Playwright tests passed.'
