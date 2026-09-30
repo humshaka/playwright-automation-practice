@@ -10,8 +10,9 @@
 //        ID: sep-qa-credentials  ->  Type: Username with password
 //        (username = SEP username, password = SEP password)
 //
-//   No other credentials are required. SEP_QA_URL is a public URL and is defined
-//   below directly. No secrets are stored in this file or committed to Git.
+//   The credential is bound with the explicit withCredentials/usernamePassword
+//   step, and ONLY within the stage that runs the tests. No secrets are stored
+//   in this file or committed to Git. SEP_QA_URL is a public URL, not a secret.
 
 pipeline {
     agent any
@@ -28,12 +29,6 @@ pipeline {
 
         // SEP_QA_URL is a public URL, not a secret - safe to set here.
         SEP_QA_URL = 'https://qa.sep.tdtm.cydeo.com/taws'
-
-        // Bind the existing "Username with password" credential (sep-qa-credentials).
-        // The _USR / _PSW suffixes split it into the SEP_USERNAME / SEP_PASSWORD
-        // environment variables that the Playwright suite expects.
-        SEP_USERNAME = credentials('sep-qa-credentials_USR')
-        SEP_PASSWORD = credentials('sep-qa-credentials_PSW')
     }
 
     stages {
@@ -56,22 +51,34 @@ pipeline {
             }
         }
 
-        stage('Verify Environment') {
-            steps {
-                bat '''
-                    @echo off
-                    if not defined SEP_QA_URL   (echo [ERROR] SEP_QA_URL is not set & exit /b 1)
-                    if not defined SEP_USERNAME (echo [ERROR] SEP_USERNAME is not set & exit /b 1)
-                    if not defined SEP_PASSWORD (echo [ERROR] SEP_PASSWORD is not set & exit /b 1)
-                    echo [OK] All SEP environment variables are present.
-                '''
-            }
-        }
-
         stage('Run Playwright Tests') {
             steps {
-                // `bat` fails the build automatically if the test run exits non-zero.
-                bat 'npm test'
+                script {
+                    // Explicit, safest credential binding. The credential ID is the
+                    // real Jenkins credential ('sep-qa-credentials'); there is no
+                    // credential named SEP_USERNAME or SEP_PASSWORD.
+                    // SEP_USERNAME / SEP_PASSWORD exist ONLY inside this block and
+                    // are automatically masked in the console log.
+                    withCredentials([
+                        usernamePassword(
+                            credentialsId: 'sep-qa-credentials',
+                            usernameVariable: 'SEP_USERNAME',
+                            passwordVariable: 'SEP_PASSWORD'
+                        )
+                    ]) {
+                        // Sanity check that the injected variables are present.
+                        bat '''
+                            @echo off
+                            if not defined SEP_USERNAME (echo [ERROR] SEP_USERNAME is not set & exit /b 1)
+                            if not defined SEP_PASSWORD (echo [ERROR] SEP_PASSWORD is not set & exit /b 1)
+                            echo [OK] SEP credentials injected by withCredentials.
+                        '''
+
+                        // The Playwright test command runs INSIDE the block so the
+                        // node process inherits SEP_USERNAME / SEP_PASSWORD.
+                        bat 'npm test'
+                    }
+                }
             }
         }
     }
@@ -79,17 +86,25 @@ pipeline {
     post {
         always {
             script {
-                // Only archive/publish reports when a workspace (FilePath) actually
-                // exists - avoids MissingContextVariableException on early aborts.
-                if (env.WORKSPACE) {
-                    // HTML report is optional: allowEmptyArchive means the build does
-                    // not fail if playwright-report/ does not exist.
-                    archiveArtifacts artifacts: 'playwright-report/**', allowEmptyArchive: true
+                // Archive/publish reports only when a workspace (FilePath) exists.
+                // This avoids MissingContextVariableException if the build aborts
+                // before a workspace is allocated.
+                try {
+                    if (env.WORKSPACE) {
+                        // HTML report is optional - allowEmptyArchive means the build
+                        // does not fail if playwright-report/ does not exist.
+                        archiveArtifacts artifacts: 'playwright-report/**', allowEmptyArchive: true
 
-                    // Publish JUnit results only if the XML file was actually produced.
-                    if (fileExists('test-results/junit.xml')) {
-                        junit allowEmptyResults: true, testResults: 'test-results/junit.xml'
+                        // JUnit reporter IS configured in playwright.config.js
+                        // (outputFile: test-results/junit.xml). Publish only when the
+                        // XML file was actually produced.
+                        if (fileExists('test-results/junit.xml')) {
+                            junit allowEmptyResults: true, testResults: 'test-results/junit.xml'
+                        }
                     }
+                } catch (Exception e) {
+                    // Report archiving/publishing must never fail the build.
+                    echo "WARN: could not archive/publish reports: ${e.message}"
                 }
             }
         }
